@@ -2,12 +2,23 @@ import leap
 import numpy as np
 import cv2
 
+from cffi import FFI
+from enum import Enum
+
+class Side(Enum):
+    Left = 0
+    Right = 1
+
 _TRACKING_MODES = {
     leap.TrackingMode.Desktop: "Desktop",
     leap.TrackingMode.HMD: "HMD",
     leap.TrackingMode.ScreenTop: "ScreenTop",
 }
 
+_CAMERA_SIDE = {
+    Side.Left: "Left",
+    Side.Right: "Right"
+}
 
 class Canvas:
     def __init__(self):
@@ -19,12 +30,19 @@ class Canvas:
         self.output_image = np.zeros((self.screen_size[0], self.screen_size[1], 3), np.uint8)
         self.tracking_mode = None
 
+        # For images management
+        self.image = np.zeros((self.screen_size[0], self.screen_size[1], 3), np.uint8)
+        self.displayed_side = Side.Left
+
     def set_tracking_mode(self, tracking_mode):
         self.tracking_mode = tracking_mode
 
     def toggle_hands_format(self):
         self.hands_format = "Dots" if self.hands_format == "Skeleton" else "Skeleton"
         print(f"Set hands format to {self.hands_format}")
+
+    def switch_view(self):
+        self.displayed_side = Side.Right if self.displayed_side is Side.Left else Side.Left
 
     def get_joint_position(self, bone):
         if bone:
@@ -34,7 +52,7 @@ class Canvas:
 
     def render_hands(self, event):
         # Clear the previous image
-        self.output_image[:, :] = 0
+        self.output_image[:, :] = cv2.resize(self.image, dsize=(self.screen_size[1], self.screen_size[0]), interpolation=cv2.INTER_CUBIC)
 
         cv2.putText(
             self.output_image,
@@ -44,6 +62,16 @@ class Canvas:
             0.5,
             self.font_colour,
             1,
+        )
+
+        cv2.putText(
+            self.output_image,
+            f"Camera: {_CAMERA_SIDE[self.displayed_side]}",
+            (10, self.screen_size[0] - 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            self.font_colour,
+            1
         )
 
         if len(event.hands) == 0:
@@ -111,6 +139,7 @@ class Canvas:
 class TrackingListener(leap.Listener):
     def __init__(self, canvas):
         self.canvas = canvas
+        self.ffi = FFI()
 
     def on_connection_event(self, event):
         pass
@@ -131,6 +160,20 @@ class TrackingListener(leap.Listener):
     def on_tracking_event(self, event):
         self.canvas.render_hands(event)
 
+    def on_image_event(self, event):
+        index = 0 if self.canvas.displayed_side is Side.Left else 1
+
+        properties = event.image[index].c_data.properties
+        offset = event.image[index].c_data.offset
+        height = properties.height
+        width = properties.width
+
+        # I'm sure it can be improved. Not feeling comfy managing pointers in Python
+        image_ptr = self.ffi.cast("int *", event.image[index].c_data.data + offset)
+        ffi_buffer = self.ffi.buffer(image_ptr, height * width)
+        np_buffer = np.flip(np.frombuffer(ffi_buffer, dtype=np.uint8).reshape((height, width)), 1)
+        self.canvas.image = np.repeat(np_buffer[:, :, np.newaxis], 3, axis=2)
+
 
 def main():
     canvas = Canvas()
@@ -143,6 +186,7 @@ def main():
     print("  s: Select ScreenTop tracking mode")
     print("  d: Select Desktop tracking mode")
     print("  f: Toggle hands format between Skeleton/Dots")
+    print("  g: Switch between right and left view")
 
     tracking_listener = TrackingListener(canvas)
 
@@ -154,6 +198,7 @@ def main():
     with connection.open():
         connection.set_tracking_mode(leap.TrackingMode.Desktop)
         canvas.set_tracking_mode(leap.TrackingMode.Desktop)
+        connection.set_policy_flags([leap.PolicyFlag.Images], [])
 
         while running:
             cv2.imshow(canvas.name, canvas.output_image)
@@ -170,6 +215,8 @@ def main():
                 connection.set_tracking_mode(leap.TrackingMode.Desktop)
             elif key == ord("f"):
                 canvas.toggle_hands_format()
+            elif key == ord("g"):
+                canvas.switch_view()
 
 
 if __name__ == "__main__":

@@ -92,7 +92,7 @@ from .functions import (
     get_extrinsic_matrix,
 )
 from .connection import Connection
-from .enums import EventType, TrackingMode, HandType
+from .enums import EventType, TrackingMode, HandType, FlagPolicy
 from .event_listener import Listener
 from .exceptions import LeapError
 from .recording import Recording, Recorder
